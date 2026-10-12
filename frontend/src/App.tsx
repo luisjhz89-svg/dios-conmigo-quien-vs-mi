@@ -79,9 +79,7 @@ const urgentReply =
   'Lamento que estés pasando por esto. Si estás en peligro inmediato o podrías hacerte daño, llama al 911 ahora y acércate a alguien de confianza; no te quedes a solas. Si puedes, dile claramente: “necesito ayuda ahora”.'
 
 function isImmediateDanger(message: string) {
-  return /(quiero (morir|suicidarme|hacerme daño)|voy a (morir|suicidarme|hacerme daño)|quitarme la vida|hacerme daño|no quiero vivir|me quiero matar)/i.test(
-    message,
-  )
+  return /(suicid|quitarme la vida|hacerme daño|autolesion|no quiero vivir|no quiero seguir viviendo|intentar matarme|me quiero matar)/i.test(message)
 }
 
 function App() {

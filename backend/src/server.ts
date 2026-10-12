@@ -104,7 +104,7 @@ app.post('/api/chat', async (request: Request, response: Response) => {
     const reply = completion.choices[0]?.message.content?.trim()
     if (!reply) throw new Error('Empty AI response')
     response.json({ reply, mode: 'ai' })
-  } catch (error) {
+  } catch {
     console.error('OpenAI request failed')
     response.status(503).json({ error: 'El acompañamiento no está disponible en este momento.' })
   }
