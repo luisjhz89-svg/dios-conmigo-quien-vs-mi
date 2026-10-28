@@ -25,7 +25,9 @@ export function requireAuth(request: Request, response: Response, next: NextFunc
   }
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET!) as jwt.JwtPayload;
+    const payload = jwt.verify(token, process.env.JWT_SECRET!, {
+      algorithms: ["HS256"],
+    }) as jwt.JwtPayload;
     if (typeof payload.sub !== "string") throw new Error("Token sin usuario");
     (request as AuthenticatedRequest).userId = payload.sub;
     next();

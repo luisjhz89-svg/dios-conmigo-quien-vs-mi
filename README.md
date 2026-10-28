@@ -25,7 +25,7 @@ La licencia del código no concede derechos sobre marcas, servicios o materiales
    cp .env.example .env
    ```
 
-3. Configura `DATABASE_URL` y un `JWT_SECRET` aleatorio de al menos 32 caracteres en `.env`. Para habilitar respuestas de IA, agrega `OPENAI_API_KEY`; sin esta clave se usan respuestas de guía predefinidas con referencias bíblicas.
+3. Configura `DATABASE_URL`, un `JWT_SECRET` aleatorio de al menos 32 caracteres y `DATA_ENCRYPTION_KEY` en `.env`. Genera la clave de cifrado con `openssl rand -base64 32` y guárdala en un gestor de secretos; perderla impide descifrar las conversaciones. Para habilitar respuestas de IA, agrega `OPENAI_API_KEY`; sin esta clave se usan respuestas de guía predefinidas con referencias bíblicas.
 4. Inicia la API y el cliente en terminales separadas:
 
    ```sh
@@ -55,9 +55,9 @@ El correo de la cuenta no habilita por sí solo la API: las credenciales se obti
 
 ## Producción y validación
 
-Configura `DATABASE_URL`, `JWT_SECRET`, `CLIENT_URL`, `OPENAI_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` y, si usas PayPal, sus variables anteriores como secretos del entorno. Habilita TLS para PostgreSQL con `DATABASE_SSL=true`, despliega la carpeta `client/dist` junto a la API y usa HTTPS. La aplicación aplica Helmet, límites de solicitudes, validación de entrada, contraseñas con hash y consultas parametrizadas.
+Configura `DATABASE_URL`, `JWT_SECRET`, `DATA_ENCRYPTION_KEY`, `CLIENT_URL`, `OPENAI_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` y, si usas PayPal, sus variables anteriores como secretos del entorno. Habilita TLS para PostgreSQL con `DATABASE_SSL=true`, despliega la carpeta `client/dist` junto a la API y usa HTTPS. La aplicación aplica Helmet, límites de solicitudes, cookies de sesión `HttpOnly`, validación de origen, contraseñas con hash y consultas parametrizadas.
 
-Las sesiones usan una cookie `HttpOnly` limitada a `/api`; en producción se agrega `Secure`. Configura `CLIENT_URL` con el origen exacto del frontend. La app no permite subir ni leer documentos personales; solo guarda correo, hash de contraseña, estado de suscripción y conversaciones asociadas a la cuenta.
+Las sesiones usan una cookie `HttpOnly` limitada a `/api`; en producción se agrega `Secure`. Configura `CLIENT_URL` con el origen exacto del frontend. El contenido de conversaciones y títulos se cifra con AES-256-GCM en la aplicación; la clave de cifrado no se guarda en la base de datos. La app no permite subir ni leer documentos personales ni controlar dispositivos o cuentas externas. Solo procesa el correo para iniciar sesión, un hash de contraseña, el estado de suscripción y las conversaciones asociadas a la cuenta. Si se configura OpenAI, el texto del chat se envía a ese proveedor para generar respuestas (con `store: false`); evita incluir contraseñas, datos bancarios o información que no quieras compartir con un proveedor externo. Stripe y PayPal reciben los datos necesarios cuando el usuario decide pagar.
 
 ```sh
 npm test

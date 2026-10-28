@@ -14,6 +14,7 @@ import { z } from "zod";
 import { createSpiritualReply } from "./ai.js";
 import { requireAuth, type AuthenticatedRequest } from "./auth.js";
 import { hasAccess } from "./access.js";
+import { decryptPrivateText, encryptPrivateText, getDataEncryptionKey } from "./data-encryption.js";
 import { initializeDatabase, pool } from "./db.js";
 import {
   createPayPalSubscription,
@@ -132,7 +133,7 @@ app.post(
       }
       response.json({ received: true });
     } catch (error) {
-      console.error("Error al procesar webhook de Stripe:", error);
+      console.error("Error al procesar webhook de Stripe:", error instanceof Error ? error.name : "UnknownError");
       response.status(500).json({ error: "No se pudo procesar el evento de pago." });
     }
   },
@@ -188,7 +189,7 @@ app.post(
       }
       response.json({ received: true });
     } catch (error) {
-      console.error("Error al procesar webhook de PayPal:", error);
+      console.error("Error al procesar webhook de PayPal:", error instanceof Error ? error.name : "UnknownError");
       response.status(500).json({ error: "No se pudo procesar el evento de PayPal." });
     }
   },
@@ -219,7 +220,11 @@ app.post("/api/auth/register", authLimiter, async (request, response) => {
       "INSERT INTO users (id, email, password_hash, trial_ends_at) VALUES ($1, $2, $3, $4)",
       [id, email, passwordHash, trialEndsAt],
     );
-    const token = jwt.sign({}, process.env.JWT_SECRET!, { subject: id, expiresIn: "7d" }    );
+    const token = jwt.sign({}, process.env.JWT_SECRET!, {
+      subject: id,
+      expiresIn: "7d",
+      algorithm: "HS256",
+    });
     setSessionCookie(response, token);
     response.status(201).json({ user: { id, email, trialEndsAt, subscriptionStatus: null } });
   } catch (error) {
@@ -252,7 +257,11 @@ app.post("/api/auth/login", authLimiter, async (request, response) => {
     response.status(401).json({ error: "Correo o contraseña incorrectos." });
     return;
   }
-  const token = jwt.sign({}, process.env.JWT_SECRET!, { subject: user.id, expiresIn: "7d" });
+  const token = jwt.sign({}, process.env.JWT_SECRET!, {
+    subject: user.id,
+    expiresIn: "7d",
+    algorithm: "HS256",
+  });
   setSessionCookie(response, token);
   response.json({
     user: {
@@ -297,7 +306,12 @@ app.get("/api/conversations", requireAuth, async (request, response) => {
       WHERE user_id = $1 ORDER BY created_at DESC LIMIT 50`,
     [userId],
   );
-  response.json({ conversations: rows });
+  response.json({
+    conversations: rows.map((conversation) => ({
+      ...conversation,
+      title: decryptPrivateText(conversation.title),
+    })),
+  });
 });
 
 app.get("/api/conversations/:id/messages", requireAuth, async (request, response) => {
@@ -313,7 +327,12 @@ app.get("/api/conversations/:id/messages", requireAuth, async (request, response
       WHERE c.id = $1 AND c.user_id = $2 ORDER BY m.created_at`,
     [conversationId.data, userId],
   );
-  response.json({ messages: rows });
+  response.json({
+    messages: rows.map((message) => ({
+      ...message,
+      content: decryptPrivateText(message.content),
+    })),
+  });
 });
 
 app.post("/api/chat", requireAuth, async (request, response) => {
@@ -355,7 +374,7 @@ app.post("/api/chat", requireAuth, async (request, response) => {
     conversationId = randomUUID();
     await pool.query(
       "INSERT INTO conversations (id, user_id, title) VALUES ($1, $2, $3)",
-      [conversationId, userId, parsed.data.content.slice(0, 60)],
+      [conversationId, userId, encryptPrivateText("Conversación")],
     );
   }
 
@@ -367,13 +386,19 @@ app.post("/api/chat", requireAuth, async (request, response) => {
   const userMessage = { id: randomUUID(), role: "user", content: parsed.data.content };
   await pool.query(
     "INSERT INTO messages (id, conversation_id, role, content) VALUES ($1, $2, 'user', $3)",
-    [userMessage.id, conversationId, userMessage.content],
+    [userMessage.id, conversationId, encryptPrivateText(userMessage.content)],
   );
-  const reply = await createSpiritualReply(parsed.data.content, history.reverse());
+  const reply = await createSpiritualReply(
+    parsed.data.content,
+    history.reverse().map((message) => ({
+      ...message,
+      content: decryptPrivateText(message.content),
+    })),
+  );
   const assistantMessage = { id: randomUUID(), role: "assistant", content: reply };
   await pool.query(
     "INSERT INTO messages (id, conversation_id, role, content) VALUES ($1, $2, 'assistant', $3)",
-    [assistantMessage.id, conversationId, assistantMessage.content],
+    [assistantMessage.id, conversationId, encryptPrivateText(assistantMessage.content)],
   );
   response.json({
     conversation: { id: conversationId },
@@ -412,7 +437,7 @@ app.post("/api/billing/checkout", requireAuth, async (request, response) => {
   }
   const userId = (request as AuthenticatedRequest).userId;
   const { rows } = await pool.query(
-    "SELECT email, stripe_customer_id FROM users WHERE id = $1",
+    "SELECT stripe_customer_id FROM users WHERE id = $1",
     [userId],
   );
   if (!rows[0]) {
@@ -431,7 +456,6 @@ app.post("/api/billing/checkout", requireAuth, async (request, response) => {
       quantity: 1,
     }],
     customer: rows[0].stripe_customer_id || undefined,
-    customer_email: rows[0].stripe_customer_id ? undefined : rows[0].email,
     client_reference_id: userId,
     subscription_data: { metadata: { user_id: userId } },
     success_url: `${clientUrl.split(",")[0]}/?billing=success`,
@@ -447,7 +471,7 @@ app.post("/api/billing/paypal/checkout", requireAuth, async (request, response) 
   }
   const userId = (request as AuthenticatedRequest).userId;
   const { rows } = await pool.query(
-    "SELECT email FROM users WHERE id = $1",
+    "SELECT id FROM users WHERE id = $1",
     [userId],
   );
   if (!rows[0]) {
@@ -456,7 +480,6 @@ app.post("/api/billing/paypal/checkout", requireAuth, async (request, response) 
   }
   const subscription = await createPayPalSubscription(
     userId,
-    rows[0].email,
     clientUrl.split(",")[0],
   );
   if (subscription.id) {
@@ -478,7 +501,7 @@ if (existsSync(clientBuild)) {
 }
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
-  console.error("Error de API:", error);
+  console.error("Error de API:", error instanceof Error ? error.name : "UnknownError");
   response.status(500).json({ error: "Ocurrió un problema. Inténtalo de nuevo." });
 });
 
@@ -487,11 +510,12 @@ async function start() {
   if (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32) {
     throw new Error("JWT_SECRET debe contener al menos 32 caracteres aleatorios.");
   }
+  getDataEncryptionKey();
   await initializeDatabase();
   app.listen(port, () => console.info(`API disponible en http://localhost:${port}`));
 }
 
 start().catch((error) => {
-  console.error("No se pudo iniciar la aplicación:", error);
+  console.error("No se pudo iniciar la aplicación:", error instanceof Error ? error.name : "UnknownError");
   process.exit(1);
 });

@@ -27,6 +27,7 @@ export async function createSpiritualReply(
       })),
       { role: "user" as const, content: userMessage },
     ],
+    store: false,
     max_output_tokens: 350,
   });
 

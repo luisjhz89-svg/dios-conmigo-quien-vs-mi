@@ -58,7 +58,6 @@ async function paypalRequest<T>(endpoint: string, options: RequestInit = {}) {
 
 export async function createPayPalSubscription(
   userId: string,
-  email: string,
   clientUrl: string,
 ) {
   const subscription = await paypalRequest<PayPalSubscription>(
@@ -68,7 +67,6 @@ export async function createPayPalSubscription(
       body: JSON.stringify({
         plan_id: requiredEnv("PAYPAL_PLAN_ID"),
         custom_id: userId,
-        subscriber: { email_address: email },
         application_context: {
           brand_name: "Dios conmigo",
           locale: "es-MX",
