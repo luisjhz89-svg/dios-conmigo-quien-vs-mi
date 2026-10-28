@@ -2,6 +2,12 @@
 
 Aplicación de acompañamiento espiritual en español. Incluye chat con referencias bíblicas, cuentas personales, historial privado y una prueba gratis de siete días; después ofrece una suscripción de **$5 MXN al mes**.
 
+## Autoría y licencia
+
+Creada por **Luis Javier Hernández Zúñiga**. El código de este proyecto se distribuye bajo la licencia [MIT](LICENSE), que permite usarlo, modificarlo y compartirlo, conservando el aviso de copyright y la licencia.
+
+La licencia del código no concede derechos sobre marcas, servicios o materiales de terceros. En particular, los textos bíblicos de traducciones específicas pueden tener sus propias condiciones de uso; verifica los permisos de cualquier contenido que incorpores o distribuyas.
+
 ## Requisitos
 
 - Node.js 22 o posterior
