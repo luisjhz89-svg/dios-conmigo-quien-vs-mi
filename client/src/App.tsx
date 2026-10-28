@@ -30,14 +30,14 @@ type Billing = {
   paypalConfigured: boolean;
 };
 
-const tokenKey = "dios-conmigo-token";
+const legacyTokenKey = "dios-conmigo-token";
 
-async function api<T>(url: string, options: RequestInit = {}, token?: string): Promise<T> {
+async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(url, {
     ...options,
+    credentials: "include",
     headers: {
       ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(token ? { Authorization: "Bearer " + token } : {}),
       ...options.headers,
     },
   });
@@ -47,7 +47,7 @@ async function api<T>(url: string, options: RequestInit = {}, token?: string): P
 }
 
 function App() {
-  const [token, setToken] = useState(() => localStorage.getItem(tokenKey) || "");
+  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "anonymous">("checking");
   const [user, setUser] = useState<User | null>(null);
   const [billing, setBilling] = useState<Billing | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -62,11 +62,11 @@ function App() {
   const [error, setError] = useState("");
   const endOfMessages = useRef<HTMLDivElement>(null);
 
-  async function refreshAccount(accessToken: string) {
+  async function refreshAccount() {
     const [account, status, chats] = await Promise.all([
-      api<{ user: User }>("/api/auth/me", {}, accessToken),
-      api<Billing>("/api/billing/status", {}, accessToken),
-      api<{ conversations: Conversation[] }>("/api/conversations", {}, accessToken),
+      api<{ user: User }>("/api/auth/me"),
+      api<Billing>("/api/billing/status"),
+      api<{ conversations: Conversation[] }>("/api/conversations"),
     ]);
     setUser(account.user);
     setBilling(status);
@@ -77,28 +77,31 @@ function App() {
       const history = await api<{ messages: Message[] }>(
         `/api/conversations/${first.id}/messages`,
         {},
-        accessToken,
       );
       setMessages(history.messages);
     }
   }
 
   useEffect(() => {
-    if (!token) return;
     let active = true;
     async function loadAccount() {
       try {
-        await refreshAccount(token);
+        await refreshAccount();
+        if (active) setAuthStatus("authenticated");
       } catch {
-        localStorage.removeItem(tokenKey);
-        if (active) setToken("");
+        if (active) setAuthStatus("anonymous");
       }
+    }
+    try {
+      localStorage.removeItem(legacyTokenKey);
+    } catch {
+      // Storage may be unavailable in private browsing contexts.
     }
     void loadAccount();
     return () => {
       active = false;
     };
-  }, [token]);
+  }, []);
 
   useEffect(() => {
     endOfMessages.current?.scrollIntoView({ behavior: "smooth" });
@@ -109,13 +112,12 @@ function App() {
     setAuthLoading(true);
     setError("");
     try {
-      const response = await api<{ token: string; user: User }>(
+      await api<{ user: User }>(
         `/api/auth/${registering ? "register" : "login"}`,
         { method: "POST", body: JSON.stringify({ email, password }) },
       );
-      localStorage.setItem(tokenKey, response.token);
-      setUser(response.user);
-      setToken(response.token);
+      await refreshAccount();
+      setAuthStatus("authenticated");
       setPassword("");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No se pudo iniciar sesión.");
@@ -125,8 +127,8 @@ function App() {
   }
 
   function signOut() {
-    localStorage.removeItem(tokenKey);
-    setToken("");
+    void api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setAuthStatus("anonymous");
     setUser(null);
     setBilling(null);
     setMessages([]);
@@ -136,14 +138,12 @@ function App() {
   }
 
   async function openConversation(id: string) {
-    if (!token) return;
     setError("");
     setConversationId(id);
     try {
       const history = await api<{ messages: Message[] }>(
         `/api/conversations/${id}/messages`,
         {},
-        token,
       );
       setMessages(history.messages);
     } catch (cause) {
@@ -153,7 +153,7 @@ function App() {
 
   async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!text.trim() || !token || loading) return;
+    if (!text.trim() || authStatus !== "authenticated" || loading) return;
     const content = text.trim();
     setText("");
     setError("");
@@ -165,22 +165,22 @@ function App() {
       }>("/api/chat", {
         method: "POST",
         body: JSON.stringify({ content, conversationId }),
-      }, token);
+      });
       setConversationId(response.conversation.id);
       setMessages((current) => [...current, ...response.messages]);
-      const chats = await api<{ conversations: Conversation[] }>("/api/conversations", {}, token);
+      const chats = await api<{ conversations: Conversation[] }>("/api/conversations");
       setConversations(chats.conversations);
     } catch (cause) {
       setText(content);
       setError(cause instanceof Error ? cause.message : "No se pudo enviar el mensaje.");
-      api<Billing>("/api/billing/status", {}, token).then(setBilling).catch(() => undefined);
+      api<Billing>("/api/billing/status").then(setBilling).catch(() => undefined);
     } finally {
       setLoading(false);
     }
   }
 
   async function subscribe() {
-    if (!token) return;
+    if (authStatus !== "authenticated") return;
     setError("");
     try {
       const checkoutPath = billing?.paypalConfigured
@@ -188,14 +188,18 @@ function App() {
         : "/api/billing/checkout";
       const response = await api<{ url: string }>(checkoutPath, {
         method: "POST",
-      }, token);
+      });
       if (response.url) window.location.assign(response.url);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "No se pudo iniciar el pago.");
     }
   }
 
-  if (!token || !user) {
+  if (authStatus === "checking") {
+    return <main className="auth-page"><p role="status">Cargando tu sesión…</p></main>;
+  }
+
+  if (authStatus !== "authenticated" || !user) {
     return (
       <main className="auth-page">
         <section className="auth-card">

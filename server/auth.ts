@@ -3,8 +3,22 @@ import jwt from "jsonwebtoken";
 
 export type AuthenticatedRequest = Request & { userId: string };
 
+export function getSessionToken(cookieHeader: string | undefined) {
+  const sessionCookie = cookieHeader
+    ?.split(";")
+    .map((cookie) => cookie.trim())
+    .find((cookie) => cookie.startsWith("dios_session="));
+  if (!sessionCookie) return null;
+
+  try {
+    return decodeURIComponent(sessionCookie.slice("dios_session=".length));
+  } catch {
+    return null;
+  }
+}
+
 export function requireAuth(request: Request, response: Response, next: NextFunction) {
-  const token = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+  const token = getSessionToken(request.headers.cookie);
   if (!token) {
     response.status(401).json({ error: "Inicia sesión para continuar." });
     return;

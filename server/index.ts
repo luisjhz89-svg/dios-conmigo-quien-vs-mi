@@ -43,6 +43,22 @@ const authLimiter = rateLimit({
   message: { error: "Demasiados intentos. Espera unos minutos e inténtalo de nuevo." },
 });
 
+function setSessionCookie(response: express.Response, token: string) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  response.append(
+    "Set-Cookie",
+    `dios_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Lax; Path=/api; Max-Age=604800${secure}`,
+  );
+}
+
+function clearSessionCookie(response: express.Response) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  response.append(
+    "Set-Cookie",
+    `dios_session=; HttpOnly; SameSite=Lax; Path=/api; Max-Age=0${secure}`,
+  );
+}
+
 app.disable("x-powered-by");
 app.use(helmet());
 app.use(cors({
@@ -50,6 +66,7 @@ app.use(cors({
     if (!origin || allowedOrigins.includes(origin)) callback(null, true);
     else callback(new Error("Origen no permitido"));
   },
+  credentials: true,
 }));
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -57,6 +74,16 @@ app.use(rateLimit({
   standardHeaders: "draft-8",
   legacyHeaders: false,
 }));
+app.use((request, response, next) => {
+  const mutatingMethod = ["POST", "PUT", "PATCH", "DELETE"].includes(request.method);
+  const webhook = request.path === "/api/billing/webhook" ||
+    request.path === "/api/billing/paypal/webhook";
+  if (mutatingMethod && !webhook && !allowedOrigins.includes(request.get("origin") || "")) {
+    response.status(403).json({ error: "Origen de solicitud no permitido." });
+    return;
+  }
+  next();
+});
 
 app.post(
   "/api/billing/webhook",
@@ -192,11 +219,9 @@ app.post("/api/auth/register", authLimiter, async (request, response) => {
       "INSERT INTO users (id, email, password_hash, trial_ends_at) VALUES ($1, $2, $3, $4)",
       [id, email, passwordHash, trialEndsAt],
     );
-    const token = jwt.sign({}, process.env.JWT_SECRET!, { subject: id, expiresIn: "7d" });
-    response.status(201).json({
-      token,
-      user: { id, email, trialEndsAt, subscriptionStatus: null },
-    });
+    const token = jwt.sign({}, process.env.JWT_SECRET!, { subject: id, expiresIn: "7d" }    );
+    setSessionCookie(response, token);
+    response.status(201).json({ user: { id, email, trialEndsAt, subscriptionStatus: null } });
   } catch (error) {
     if ((error as { code?: string }).code === "23505") {
       response.status(409).json({ error: "Ya existe una cuenta con ese correo." });
@@ -228,8 +253,8 @@ app.post("/api/auth/login", authLimiter, async (request, response) => {
     return;
   }
   const token = jwt.sign({}, process.env.JWT_SECRET!, { subject: user.id, expiresIn: "7d" });
+  setSessionCookie(response, token);
   response.json({
-    token,
     user: {
       id: user.id,
       email: user.email,
@@ -237,6 +262,11 @@ app.post("/api/auth/login", authLimiter, async (request, response) => {
       subscriptionStatus: user.subscription_status,
     },
   });
+});
+
+app.post("/api/auth/logout", (_request, response) => {
+  clearSessionCookie(response);
+  response.status(204).end();
 });
 
 app.get("/api/auth/me", requireAuth, async (request, response) => {
