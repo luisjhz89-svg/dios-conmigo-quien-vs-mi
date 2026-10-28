@@ -28,6 +28,7 @@ type Billing = {
   hasAccess: boolean;
   paymentsConfigured: boolean;
   paypalConfigured: boolean;
+  stripeConfigured: boolean;
 };
 
 const legacyTokenKey = "dios-conmigo-token";
@@ -41,7 +42,7 @@ async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
       ...options.headers,
     },
   });
-  const result = await response.json();
+  const result = response.status === 204 ? {} : await response.json();
   if (!response.ok) throw new Error(result.error || "Ocurrió un error.");
   return result as T;
 }
@@ -179,11 +180,11 @@ function App() {
     }
   }
 
-  async function subscribe() {
+  async function subscribe(provider: "paypal" | "stripe") {
     if (authStatus !== "authenticated") return;
     setError("");
     try {
-      const checkoutPath = billing?.paypalConfigured
+      const checkoutPath = provider === "paypal"
         ? "/api/billing/paypal/checkout"
         : "/api/billing/checkout";
       const response = await api<{ url: string }>(checkoutPath, {
@@ -306,9 +307,23 @@ function App() {
             ) : trialDays > 0 ? (
               <span>Prueba gratuita · <strong>{trialDays} días</strong></span>
             ) : (
-              <button className="subscribe-button" onClick={subscribe} disabled={!billing?.paymentsConfigured}>
-                {billing?.paypalConfigured ? "Pagar con PayPal · $5 MXN/mes" : "Suscribirme · $5 MXN/mes"}
-              </button>
+              <div className="payment-options">
+                {billing?.paypalConfigured && (
+                  <button className="subscribe-button" onClick={() => subscribe("paypal")}>
+                    PayPal · $5 MXN/mes
+                  </button>
+                )}
+                {billing?.stripeConfigured && (
+                  <button className="subscribe-button" onClick={() => subscribe("stripe")}>
+                    Apple Pay o tarjeta · $5 MXN/mes
+                  </button>
+                )}
+                {!billing?.paymentsConfigured && (
+                  <button className="subscribe-button" disabled>
+                    Pagos no disponibles
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </header>
@@ -349,9 +364,14 @@ function App() {
           {error && <p className="error-message composer-error" role="alert">{error}</p>}
           {!billing?.hasAccess && billing && (
             <div className="locked-note">
-              Tu prueba terminó. <button onClick={subscribe} disabled={!billing.paymentsConfigured}>
-                {billing.paypalConfigured ? "Continúa con PayPal por $5 MXN al mes" : "Continúa por $5 MXN al mes"}
-              </button>
+              <span>Tu prueba terminó.</span>
+              {billing.paypalConfigured && (
+                <button onClick={() => subscribe("paypal")}>Continuar con PayPal · $5 MXN/mes</button>
+              )}
+              {billing.stripeConfigured && (
+                <button onClick={() => subscribe("stripe")}>Apple Pay o tarjeta · $5 MXN/mes</button>
+              )}
+              {!billing.paymentsConfigured && <span>Los pagos aún no están disponibles.</span>}
             </div>
           )}
           <form className="composer" onSubmit={sendMessage}>

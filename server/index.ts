@@ -401,6 +401,7 @@ app.get("/api/billing/status", requireAuth, async (request, response) => {
     hasAccess: hasAccess(rows[0].trial_ends_at, rows[0].subscription_status),
     paymentsConfigured: Boolean(stripe) || paypalConfigured,
     paypalConfigured,
+    stripeConfigured: Boolean(stripe),
   });
 });
 

@@ -331,6 +331,13 @@
   color: #45664f;
 }
 
+.payment-options {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .active-plan {
   color: #45664f;
   font-weight: 600;
@@ -559,6 +566,10 @@
 }
 
 .locked-note {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
   margin-bottom: 10px;
   color: #9a5a3c;
   font-size: 11px;
@@ -567,6 +578,10 @@
 
 .locked-note button {
   text-decoration: underline;
+}
+
+.subscribe-button:disabled {
+  opacity: 0.65;
 }
 
 .visually-hidden {
