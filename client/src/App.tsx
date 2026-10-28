@@ -1,0 +1,404 @@
+import { useEffect, useRef, useState } from "react";
+import type { FormEvent } from "react";
+import "./App.css";
+
+type User = {
+  id: string;
+  email: string;
+  trialEndsAt: string;
+  subscriptionStatus: string | null;
+};
+
+type Message = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
+type Conversation = {
+  id: string;
+  title: string;
+  created_at: string;
+};
+
+type Billing = {
+  trialEndsAt: string;
+  trialDaysRemaining: number;
+  subscriptionStatus: string | null;
+  hasAccess: boolean;
+  paymentsConfigured: boolean;
+  paypalConfigured: boolean;
+  stripeConfigured: boolean;
+};
+
+const legacyTokenKey = "dios-conmigo-token";
+
+async function api<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const response = await fetch(url, {
+    ...options,
+    credentials: "include",
+    headers: {
+      ...(options.body ? { "Content-Type": "application/json" } : {}),
+      ...options.headers,
+    },
+  });
+  const result = response.status === 204 ? {} : await response.json();
+  if (!response.ok) throw new Error(result.error || "Ocurrió un error.");
+  return result as T;
+}
+
+function App() {
+  const [authStatus, setAuthStatus] = useState<"checking" | "authenticated" | "anonymous">("checking");
+  const [user, setUser] = useState<User | null>(null);
+  const [billing, setBilling] = useState<Billing | null>(null);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [text, setText] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [registering, setRegistering] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [error, setError] = useState("");
+  const endOfMessages = useRef<HTMLDivElement>(null);
+
+  async function refreshAccount() {
+    const [account, status, chats] = await Promise.all([
+      api<{ user: User }>("/api/auth/me"),
+      api<Billing>("/api/billing/status"),
+      api<{ conversations: Conversation[] }>("/api/conversations"),
+    ]);
+    setUser(account.user);
+    setBilling(status);
+    setConversations(chats.conversations);
+    if (chats.conversations.length) {
+      const first = chats.conversations[0];
+      setConversationId(first.id);
+      const history = await api<{ messages: Message[] }>(
+        `/api/conversations/${first.id}/messages`,
+        {},
+      );
+      setMessages(history.messages);
+    }
+  }
+
+  useEffect(() => {
+    let active = true;
+    async function loadAccount() {
+      try {
+        await refreshAccount();
+        if (active) setAuthStatus("authenticated");
+      } catch {
+        if (active) setAuthStatus("anonymous");
+      }
+    }
+    try {
+      localStorage.removeItem(legacyTokenKey);
+    } catch {
+      // Storage may be unavailable in private browsing contexts.
+    }
+    void loadAccount();
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    endOfMessages.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthLoading(true);
+    setError("");
+    try {
+      await api<{ user: User }>(
+        `/api/auth/${registering ? "register" : "login"}`,
+        { method: "POST", body: JSON.stringify({ email, password }) },
+      );
+      await refreshAccount();
+      setAuthStatus("authenticated");
+      setPassword("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No se pudo iniciar sesión.");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  function signOut() {
+    void api("/api/auth/logout", { method: "POST" }).catch(() => undefined);
+    setAuthStatus("anonymous");
+    setUser(null);
+    setBilling(null);
+    setMessages([]);
+    setConversations([]);
+    setConversationId(null);
+    setError("");
+  }
+
+  async function openConversation(id: string) {
+    setError("");
+    setConversationId(id);
+    try {
+      const history = await api<{ messages: Message[] }>(
+        `/api/conversations/${id}/messages`,
+        {},
+      );
+      setMessages(history.messages);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No se pudo abrir el chat.");
+    }
+  }
+
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!text.trim() || authStatus !== "authenticated" || loading) return;
+    const content = text.trim();
+    setText("");
+    setError("");
+    setLoading(true);
+    try {
+      const response = await api<{
+        conversation: { id: string };
+        messages: Message[];
+      }>("/api/chat", {
+        method: "POST",
+        body: JSON.stringify({ content, conversationId }),
+      });
+      setConversationId(response.conversation.id);
+      setMessages((current) => [...current, ...response.messages]);
+      const chats = await api<{ conversations: Conversation[] }>("/api/conversations");
+      setConversations(chats.conversations);
+    } catch (cause) {
+      setText(content);
+      setError(cause instanceof Error ? cause.message : "No se pudo enviar el mensaje.");
+      api<Billing>("/api/billing/status").then(setBilling).catch(() => undefined);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function subscribe(provider: "paypal" | "stripe") {
+    if (authStatus !== "authenticated") return;
+    setError("");
+    try {
+      const checkoutPath = provider === "paypal"
+        ? "/api/billing/paypal/checkout"
+        : "/api/billing/checkout";
+      const response = await api<{ url: string }>(checkoutPath, {
+        method: "POST",
+      });
+      if (response.url) window.location.assign(response.url);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "No se pudo iniciar el pago.");
+    }
+  }
+
+  if (authStatus === "checking") {
+    return <main className="auth-page"><p role="status">Cargando tu sesión…</p></main>;
+  }
+
+  if (authStatus !== "authenticated" || !user) {
+    return (
+      <main className="auth-page">
+        <section className="auth-card">
+          <div className="brand-mark" aria-hidden="true">✦</div>
+          <p className="eyebrow">UN ESPACIO PARA TU CORAZÓN</p>
+          <h1>Dios conmigo,<br />¿quién contra mí?</h1>
+          <p className="auth-intro">
+            Comparte lo que estás viviendo y encuentra una palabra de fe para acompañarte.
+          </p>
+          <form className="auth-form" onSubmit={handleAuth}>
+            <label htmlFor="email">Correo electrónico</label>
+            <input
+              id="email"
+              type="email"
+              autoComplete="email"
+              required
+              maxLength={254}
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="tu@correo.com"
+            />
+            <label htmlFor="password">Contraseña</label>
+            <input
+              id="password"
+              type="password"
+              autoComplete={registering ? "new-password" : "current-password"}
+              required
+              minLength={registering ? 8 : 1}
+              maxLength={72}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder={registering ? "Al menos 8 caracteres" : "Tu contraseña"}
+            />
+            {error && <p className="error-message" role="alert">{error}</p>}
+            <button className="primary-button" type="submit" disabled={authLoading}>
+              {authLoading ? "Un momento…" : registering ? "Comenzar mis 7 días gratis" : "Iniciar sesión"}
+            </button>
+          </form>
+          <p className="switch-auth">
+            {registering ? "¿Ya tienes cuenta?" : "¿Aún no tienes cuenta?"}{" "}
+            <button type="button" onClick={() => {
+              setRegistering(!registering);
+              setError("");
+            }}>
+              {registering ? "Inicia sesión" : "Regístrate"}
+            </button>
+          </p>
+          <p className="fine-print">7 días gratis. Después, solo $5 MXN al mes.</p>
+        </section>
+      </main>
+    );
+  }
+
+  const trialDays = billing?.trialDaysRemaining ?? 7;
+
+  return (
+    <main className="app-shell">
+      <aside className="sidebar">
+        <a className="sidebar-brand" href="/" aria-label="Inicio">
+          <span className="brand-mark small" aria-hidden="true">✦</span>
+          <span>Dios conmigo</span>
+        </a>
+        <button className="new-chat-button" onClick={() => {
+          setConversationId(null);
+          setMessages([]);
+          setError("");
+        }}>
+          <span aria-hidden="true">＋</span> Nueva conversación
+        </button>
+        <p className="sidebar-label">TUS CONVERSACIONES</p>
+        <nav className="conversation-list" aria-label="Historial de conversaciones">
+          {conversations.map((conversation) => (
+            <button
+              key={conversation.id}
+              className={`conversation-item ${conversation.id === conversationId ? "selected" : ""}`}
+              onClick={() => openConversation(conversation.id)}
+              title={conversation.title}
+            >
+              <span aria-hidden="true">◷</span>
+              <span>{conversation.title}</span>
+            </button>
+          ))}
+          {conversations.length === 0 && <p className="empty-history">Aquí aparecerán tus charlas.</p>}
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="user-avatar" aria-hidden="true">{user.email.charAt(0).toUpperCase()}</div>
+          <div className="user-summary">
+            <strong>{user.email}</strong>
+            <span>{billing?.subscriptionStatus === "active" ? "Suscripción activa" : trialDays > 0 ? `${trialDays} días de prueba` : "Prueba finalizada"}</span>
+          </div>
+          <button className="sign-out-button" onClick={signOut} aria-label="Cerrar sesión" title="Cerrar sesión">↗</button>
+        </div>
+      </aside>
+
+      <section className="chat-panel">
+        <header className="topbar">
+          <div className="mobile-brand">
+            <span className="brand-mark small" aria-hidden="true">✦</span>
+            <span>Dios conmigo</span>
+          </div>
+          <div className="subscription-status">
+            {billing?.subscriptionStatus === "active" ? (
+              <span className="active-plan">✦ Acceso completo</span>
+            ) : trialDays > 0 ? (
+              <span>Prueba gratuita · <strong>{trialDays} días</strong></span>
+            ) : (
+              <div className="payment-options">
+                {billing?.paypalConfigured && (
+                  <button className="subscribe-button" onClick={() => subscribe("paypal")}>
+                    PayPal · $5 MXN/mes
+                  </button>
+                )}
+                {billing?.stripeConfigured && (
+                  <button className="subscribe-button" onClick={() => subscribe("stripe")}>
+                    Apple Pay o tarjeta · $5 MXN/mes
+                  </button>
+                )}
+                {!billing?.paymentsConfigured && (
+                  <button className="subscribe-button" disabled>
+                    Pagos no disponibles
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        </header>
+
+        <div className={`messages ${messages.length ? "has-messages" : ""}`}>
+          {messages.length === 0 && (
+            <div className="welcome">
+              <span className="welcome-icon" aria-hidden="true">✦</span>
+              <p className="eyebrow">AQUÍ PUEDES HABLAR CON CONFIANZA</p>
+              <h2>¿Qué hay en tu corazón hoy?</h2>
+              <p>Cuéntame lo que sientes. Estoy aquí para escucharte y compartir contigo una reflexión y pasajes de la Biblia.</p>
+              <div className="prompt-chips">
+                {["Me siento preocupado", "Necesito tomar una decisión", "Quiero agradecer"].map((prompt) => (
+                  <button key={prompt} onClick={() => setText(prompt)}>{prompt}</button>
+                ))}
+              </div>
+            </div>
+          )}
+          {messages.map((message) => (
+            <article key={message.id} className={`message ${message.role}`}>
+              {message.role === "assistant" && <div className="message-avatar" aria-hidden="true">✦</div>}
+              <div className="message-content">
+                <span className="message-author">{message.role === "assistant" ? "Acompañamiento" : "Tú"}</span>
+                <p>{message.content}</p>
+              </div>
+            </article>
+          ))}
+          {loading && (
+            <div className="message assistant">
+              <div className="message-avatar" aria-hidden="true">✦</div>
+              <div className="typing-indicator" aria-label="Preparando una respuesta"><i /><i /><i /></div>
+            </div>
+          )}
+          <div ref={endOfMessages} />
+        </div>
+
+        <div className="composer-area">
+          {error && <p className="error-message composer-error" role="alert">{error}</p>}
+          {!billing?.hasAccess && billing && (
+            <div className="locked-note">
+              <span>Tu prueba terminó.</span>
+              {billing.paypalConfigured && (
+                <button onClick={() => subscribe("paypal")}>Continuar con PayPal · $5 MXN/mes</button>
+              )}
+              {billing.stripeConfigured && (
+                <button onClick={() => subscribe("stripe")}>Apple Pay o tarjeta · $5 MXN/mes</button>
+              )}
+              {!billing.paymentsConfigured && <span>Los pagos aún no están disponibles.</span>}
+            </div>
+          )}
+          <form className="composer" onSubmit={sendMessage}>
+            <label className="visually-hidden" htmlFor="message">Escribe lo que sientes</label>
+            <textarea
+              id="message"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder="Escribe lo que sientes…"
+              maxLength={2000}
+              rows={1}
+              disabled={!billing?.hasAccess || loading}
+            />
+            <button type="submit" disabled={!text.trim() || !billing?.hasAccess || loading} aria-label="Enviar mensaje">↑</button>
+          </form>
+          <p className="composer-hint">Presiona Enter para enviar · Shift + Enter para una nueva línea</p>
+          <p className="care-note">Este espacio ofrece acompañamiento espiritual y no sustituye atención profesional.</p>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+export default App;
