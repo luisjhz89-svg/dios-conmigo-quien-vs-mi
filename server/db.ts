@@ -16,8 +16,10 @@ export async function initializeDatabase() {
       trial_ends_at TIMESTAMPTZ NOT NULL,
       subscription_status TEXT,
       stripe_customer_id TEXT,
+      paypal_subscription_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS paypal_subscription_id TEXT;
     CREATE TABLE IF NOT EXISTS conversations (
       id UUID PRIMARY KEY,
       user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,

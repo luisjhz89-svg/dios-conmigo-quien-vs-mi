@@ -45,9 +45,15 @@ stripe listen --forward-to localhost:3000/api/billing/webhook
 
 Configura también el endpoint `/api/billing/webhook` en Stripe y habilita los eventos `checkout.session.completed`, `customer.subscription.updated` y `customer.subscription.deleted`. No guardes claves reales en el repositorio.
 
+### PayPal
+
+Para aceptar suscripciones por PayPal, configura en el entorno del servidor `PAYPAL_ENVIRONMENT=sandbox` (o `live`), `PAYPAL_CLIENT_ID`, `PAYPAL_CLIENT_SECRET`, `PAYPAL_PLAN_ID` y `PAYPAL_WEBHOOK_ID`. Crea en el panel de PayPal un plan recurrente de **5 MXN al mes**; configura el webhook en `https://TU-DOMINIO/api/billing/paypal/webhook` para los eventos `BILLING.SUBSCRIPTION.ACTIVATED`, `BILLING.SUBSCRIPTION.UPDATED`, `BILLING.SUBSCRIPTION.CANCELLED`, `BILLING.SUBSCRIPTION.EXPIRED`, `BILLING.SUBSCRIPTION.SUSPENDED` y `BILLING.SUBSCRIPTION.PAYMENT.FAILED`. Selecciona `live` únicamente cuando la cuenta y el plan estén listos para cobrar de verdad.
+
+El correo de la cuenta no habilita por sí solo la API: las credenciales se obtienen en el panel de desarrolladores de PayPal y deben guardarse como secretos del servidor, nunca en el frontend ni en el repositorio.
+
 ## Producción y validación
 
-Configura `DATABASE_URL`, `JWT_SECRET`, `CLIENT_URL`, `OPENAI_API_KEY`, `STRIPE_SECRET_KEY` y `STRIPE_WEBHOOK_SECRET` como variables seguras del entorno. Habilita TLS para PostgreSQL con `DATABASE_SSL=true`, despliega la carpeta `client/dist` junto a la API y usa HTTPS. La aplicación aplica Helmet, límites de solicitudes, validación de entrada, contraseñas con hash y consultas parametrizadas.
+Configura `DATABASE_URL`, `JWT_SECRET`, `CLIENT_URL`, `OPENAI_API_KEY`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` y, si usas PayPal, sus variables anteriores como secretos del entorno. Habilita TLS para PostgreSQL con `DATABASE_SSL=true`, despliega la carpeta `client/dist` junto a la API y usa HTTPS. La aplicación aplica Helmet, límites de solicitudes, validación de entrada, contraseñas con hash y consultas parametrizadas.
 
 ```sh
 npm test

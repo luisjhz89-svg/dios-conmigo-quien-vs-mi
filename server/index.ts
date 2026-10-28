@@ -15,6 +15,12 @@ import { createSpiritualReply } from "./ai.js";
 import { requireAuth, type AuthenticatedRequest } from "./auth.js";
 import { hasAccess } from "./access.js";
 import { initializeDatabase, pool } from "./db.js";
+import {
+  createPayPalSubscription,
+  subscriptionStatusForPayPalEvent,
+  verifyPayPalWebhook,
+  type PayPalWebhookEvent,
+} from "./paypal.js";
 
 const app = express();
 const port = Number(process.env.PORT || 3000);
@@ -22,6 +28,12 @@ const clientUrl = process.env.CLIENT_URL || "http://localhost:5173";
 const stripe = process.env.STRIPE_SECRET_KEY
   ? new Stripe(process.env.STRIPE_SECRET_KEY)
   : null;
+const paypalConfigured = Boolean(
+  process.env.PAYPAL_CLIENT_ID &&
+  process.env.PAYPAL_CLIENT_SECRET &&
+  process.env.PAYPAL_PLAN_ID &&
+  process.env.PAYPAL_WEBHOOK_ID,
+);
 const allowedOrigins = clientUrl.split(",").map((origin) => origin.trim());
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -95,6 +107,62 @@ app.post(
     } catch (error) {
       console.error("Error al procesar webhook de Stripe:", error);
       response.status(500).json({ error: "No se pudo procesar el evento de pago." });
+    }
+  },
+);
+
+app.post(
+  "/api/billing/paypal/webhook",
+  express.raw({ type: "application/json" }),
+  async (request, response) => {
+    let event: PayPalWebhookEvent;
+    try {
+      event = JSON.parse(request.body.toString("utf8")) as PayPalWebhookEvent;
+    } catch {
+      response.status(400).json({ error: "Evento de PayPal inválido." });
+      return;
+    }
+
+    let verified: boolean;
+    try {
+      verified = await verifyPayPalWebhook(request.headers, event);
+    } catch {
+      response.status(503).json({ error: "No se pudo verificar el evento de PayPal." });
+      return;
+    }
+    if (!verified) {
+      response.status(400).json({ error: "Firma de webhook de PayPal inválida." });
+      return;
+    }
+
+    const subscriptionStatus = subscriptionStatusForPayPalEvent(event);
+    if (!subscriptionStatus) {
+      response.json({ received: true });
+      return;
+    }
+
+    try {
+      const subscriptionId = event.resource?.id ?? event.resource?.billing_agreement_id ?? null;
+      let userId = event.resource?.custom_id;
+      if (!userId && subscriptionId) {
+        const { rows } = await pool.query(
+          "SELECT id FROM users WHERE paypal_subscription_id = $1",
+          [subscriptionId],
+        );
+        userId = rows[0]?.id;
+      }
+      if (userId) {
+        await pool.query(
+          `UPDATE users SET subscription_status = $2,
+            paypal_subscription_id = COALESCE($3, paypal_subscription_id)
+            WHERE id = $1`,
+          [userId, subscriptionStatus, subscriptionId],
+        );
+      }
+      response.json({ received: true });
+    } catch (error) {
+      console.error("Error al procesar webhook de PayPal:", error);
+      response.status(500).json({ error: "No se pudo procesar el evento de PayPal." });
     }
   },
 );
@@ -301,7 +369,8 @@ app.get("/api/billing/status", requireAuth, async (request, response) => {
     ),
     subscriptionStatus: rows[0].subscription_status,
     hasAccess: hasAccess(rows[0].trial_ends_at, rows[0].subscription_status),
-    paymentsConfigured: Boolean(stripe),
+    paymentsConfigured: Boolean(stripe) || paypalConfigured,
+    paypalConfigured,
   });
 });
 
@@ -338,6 +407,34 @@ app.post("/api/billing/checkout", requireAuth, async (request, response) => {
     cancel_url: `${clientUrl.split(",")[0]}/?billing=cancel`,
   });
   response.json({ url: session.url });
+});
+
+app.post("/api/billing/paypal/checkout", requireAuth, async (request, response) => {
+  if (!paypalConfigured) {
+    response.status(503).json({ error: "PayPal todavía no está configurado en el servidor." });
+    return;
+  }
+  const userId = (request as AuthenticatedRequest).userId;
+  const { rows } = await pool.query(
+    "SELECT email FROM users WHERE id = $1",
+    [userId],
+  );
+  if (!rows[0]) {
+    response.status(404).json({ error: "No se encontró la cuenta." });
+    return;
+  }
+  const subscription = await createPayPalSubscription(
+    userId,
+    rows[0].email,
+    clientUrl.split(",")[0],
+  );
+  if (subscription.id) {
+    await pool.query(
+      "UPDATE users SET paypal_subscription_id = $2 WHERE id = $1",
+      [userId, subscription.id],
+    );
+  }
+  response.json({ url: subscription.url });
 });
 
 const clientBuild = path.resolve(

@@ -27,6 +27,7 @@ type Billing = {
   subscriptionStatus: string | null;
   hasAccess: boolean;
   paymentsConfigured: boolean;
+  paypalConfigured: boolean;
 };
 
 const tokenKey = "dios-conmigo-token";
@@ -182,7 +183,10 @@ function App() {
     if (!token) return;
     setError("");
     try {
-      const response = await api<{ url: string }>("/api/billing/checkout", {
+      const checkoutPath = billing?.paypalConfigured
+        ? "/api/billing/paypal/checkout"
+        : "/api/billing/checkout";
+      const response = await api<{ url: string }>(checkoutPath, {
         method: "POST",
       }, token);
       if (response.url) window.location.assign(response.url);
@@ -299,7 +303,7 @@ function App() {
               <span>Prueba gratuita · <strong>{trialDays} días</strong></span>
             ) : (
               <button className="subscribe-button" onClick={subscribe} disabled={!billing?.paymentsConfigured}>
-                Suscribirme · $5 MXN/mes
+                {billing?.paypalConfigured ? "Pagar con PayPal · $5 MXN/mes" : "Suscribirme · $5 MXN/mes"}
               </button>
             )}
           </div>
@@ -341,7 +345,9 @@ function App() {
           {error && <p className="error-message composer-error" role="alert">{error}</p>}
           {!billing?.hasAccess && billing && (
             <div className="locked-note">
-              Tu prueba terminó. <button onClick={subscribe} disabled={!billing.paymentsConfigured}>Continúa por $5 MXN al mes</button>
+              Tu prueba terminó. <button onClick={subscribe} disabled={!billing.paymentsConfigured}>
+                {billing.paypalConfigured ? "Continúa con PayPal por $5 MXN al mes" : "Continúa por $5 MXN al mes"}
+              </button>
             </div>
           )}
           <form className="composer" onSubmit={sendMessage}>
